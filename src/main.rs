@@ -91,7 +91,7 @@ fn TimerCh0(_trap_frame: &mut TrapFrame) {
 
     //Get and toggle the led pin:
     riscv::interrupt::free(|cs| {
-        if let Some(ref mut led_pin) = G_INTERRUPT_LED_PIN.borrow(cs).borrow_mut().deref_mut() {
+        if let Some(led_pin) = G_INTERRUPT_LED_PIN.borrow(cs).borrow_mut().deref_mut() {
             led_pin.toggle().ok();
         }
     });
