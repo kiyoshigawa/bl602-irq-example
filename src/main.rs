@@ -6,6 +6,7 @@
 
 use bl602_hal as hal;
 use core::cell::RefCell;
+use core::ops::DerefMut;
 use embedded_hal::delay::blocking::DelayMs;
 use embedded_hal::digital::blocking::{OutputPin, ToggleableOutputPin};
 use embedded_time::duration::Milliseconds;
@@ -59,8 +60,8 @@ fn main() -> ! {
     timer_ch0.enable();
 
     // Move the references to their UnsafeCells once initialized, and before interrupts are enabled.
-    riscv::interrupt::free(|cs| *G_INTERRUPT_LED_PIN.borrow(cs).borrow_mut() = Some(blue_led_pin));
-    riscv::interrupt::free(|cs| *G_LED_TIMER.borrow(cs).borrow_mut() = Some(timer_ch0));
+    riscv::interrupt::free(|cs| G_INTERRUPT_LED_PIN.borrow(cs).replace(Some(blue_led_pin)));
+    riscv::interrupt::free(|cs| G_LED_TIMER.borrow(cs).replace(Some(timer_ch0)));
 
     // Enable the timer interrupt only after pin and timer setup and move to global references:
     enable_interrupt(Interrupt::TimerCh0);
@@ -83,14 +84,14 @@ fn TimerCh0(_trap_frame: &mut TrapFrame) {
 
     //clear the timer match0 interrupt:
     riscv::interrupt::free(|cs| {
-        if let Some(timer) = G_LED_TIMER.borrow(cs).replace(None) {
+        if let Some(timer) = G_LED_TIMER.borrow(cs).borrow_mut().deref_mut() {
             timer.clear_match0_interrupt();
         }
     });
 
     //Get and toggle the led pin:
     riscv::interrupt::free(|cs| {
-        if let Some(mut led_pin) = G_INTERRUPT_LED_PIN.borrow(cs).replace(None) {
+        if let Some(led_pin) = G_INTERRUPT_LED_PIN.borrow(cs).borrow_mut().deref_mut() {
             led_pin.toggle().ok();
         }
     });
