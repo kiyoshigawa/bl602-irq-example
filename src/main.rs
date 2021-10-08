@@ -5,7 +5,7 @@
 #![no_main]
 
 use bl602_hal as hal;
-use core::mem::MaybeUninit;
+use core::cell::RefCell;
 use embedded_hal::delay::blocking::DelayMs;
 use embedded_hal::digital::blocking::{OutputPin, ToggleableOutputPin};
 use embedded_time::duration::Milliseconds;
@@ -18,22 +18,15 @@ use hal::{
     timer::*,
 };
 use panic_halt as _;
+use riscv::interrupt::Mutex;
 
 // Setup custom types to make the code  below easier to read:
 type BlueLedPin = hal::gpio::Pin11<Output<PullDown>>;
 type LedTimer = hal::timer::ConfiguredTimerChannel0;
 
-// Initialize global static containers and getters:
-static mut G_INTERRUPT_LED_PIN: MaybeUninit<BlueLedPin> = MaybeUninit::uninit();
-static mut G_LED_TIMER: MaybeUninit<LedTimer> = MaybeUninit::uninit();
-
-fn get_interrupt_led_pin() -> &'static mut BlueLedPin {
-    unsafe { &mut *G_INTERRUPT_LED_PIN.as_mut_ptr() }
-}
-
-fn get_led_timer() -> &'static mut LedTimer {
-    unsafe { &mut *G_LED_TIMER.as_mut_ptr() }
-}
+// Initialize global static containers:
+static G_INTERRUPT_LED_PIN: Mutex<RefCell<Option<BlueLedPin>>> = Mutex::new(RefCell::new(None));
+static G_LED_TIMER: Mutex<RefCell<Option<LedTimer>>> = Mutex::new(RefCell::new(None));
 
 #[riscv_rt::entry]
 fn main() -> ! {
@@ -66,10 +59,8 @@ fn main() -> ! {
     timer_ch0.enable();
 
     // Move the references to their UnsafeCells once initialized, and before interrupts are enabled.
-    unsafe {
-        *(G_INTERRUPT_LED_PIN.as_mut_ptr()) = blue_led_pin;
-        *(G_LED_TIMER.as_mut_ptr()) = timer_ch0;
-    }
+    riscv::interrupt::free(|cs| *G_INTERRUPT_LED_PIN.borrow(cs).borrow_mut() = Some(blue_led_pin));
+    riscv::interrupt::free(|cs| *G_LED_TIMER.borrow(cs).borrow_mut() = Some(timer_ch0));
 
     // Enable the timer interrupt only after pin and timer setup and move to global references:
     enable_interrupt(Interrupt::TimerCh0);
@@ -87,16 +78,23 @@ fn main() -> ! {
 #[allow(non_snake_case)]
 #[no_mangle]
 fn TimerCh0(_trap_frame: &mut TrapFrame) {
-    // Disable and clear the timer interrupts for the duration of this interrupt function:
     disable_interrupt(Interrupt::TimerCh0);
     clear_interrupt(Interrupt::TimerCh0);
-    get_led_timer().disable();
-    get_led_timer().clear_match0_interrupt();
+
+    //clear the timer match0 interrupt:
+    riscv::interrupt::free(|cs| {
+        if let Some(timer) = G_LED_TIMER.borrow(cs).replace(None) {
+            timer.clear_match0_interrupt();
+        }
+    });
 
     //Get and toggle the led pin:
-    let _ = get_interrupt_led_pin().toggle();
+    riscv::interrupt::free(|cs| {
+        if let Some(mut led_pin) = G_INTERRUPT_LED_PIN.borrow(cs).replace(None) {
+            led_pin.toggle().ok();
+        }
+    });
 
-    // Re-enable interrupts when done:
-    get_led_timer().enable();
+    // Re-enable interrupt when done:
     enable_interrupt(Interrupt::TimerCh0);
 }
